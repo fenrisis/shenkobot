@@ -1,0 +1,10 @@
+.env
+shenkobot
+/shenkobot.exe
+*.log
+.DS_Store
+.vscode
+.claude
+.idea
+
+

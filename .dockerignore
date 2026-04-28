@@ -1,0 +1,10 @@
+.git
+.gitignore
+.idea
+.vscode
+.claude
+.env
+*.log
+shenkobot
+deploy
+backups
