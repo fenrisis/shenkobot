@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -121,7 +122,7 @@ func (r *Repository) Stats(ctx context.Context) ([]Stat, error) {
 }
 
 func (r *Repository) LastAskedAt(ctx context.Context) (time.Time, error) {
-	var t *time.Time
+	var t sql.NullTime
 	err := r.db.WithContext(ctx).
 		Model(&Question{}).
 		Select("MAX(asked_at)").
@@ -129,8 +130,8 @@ func (r *Repository) LastAskedAt(ctx context.Context) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, err
 	}
-	if t == nil {
+	if !t.Valid {
 		return time.Time{}, nil
 	}
-	return *t, nil
+	return t.Time, nil
 }
