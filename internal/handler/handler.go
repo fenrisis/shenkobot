@@ -100,7 +100,7 @@ func (h *Handler) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		case "stats":
 			h.svc.SendStats(ctx, msg.Chat.ID)
 		case "ask":
-			h.svc.AskAll(ctx)
+			h.handleAskCommand(ctx, msg)
 		default:
 			h.log.Debug("unknown command ignored", zap.String("command", cmd))
 		}
@@ -121,6 +121,51 @@ func (h *Handler) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		msg.From.ID,
 		msg.Text,
 	)
+}
+
+func (h *Handler) handleAskCommand(ctx context.Context, msg *tgbotapi.Message) {
+	if msg.From == nil {
+		h.log.Warn("/ask from message without sender", zap.Int("message_id", msg.MessageID))
+		return
+	}
+
+	telegramID := msg.From.ID
+	username := msg.From.UserName
+	if username == "" {
+		username = msg.From.FirstName
+	}
+
+	op := h.log.With(
+		zap.String("op", "handle_ask"),
+		zap.Int64("from_user_id", telegramID),
+		zap.String("username", username),
+	)
+
+	// Проверить все ограничения
+	check := h.svc.CanAsk(ctx, telegramID, username, msg.Chat.ID)
+	if !check.Allowed {
+		// Отправить сообщение об ошибке
+		if _, err := h.api.Send(tgbotapi.NewMessage(msg.Chat.ID, check.Message)); err != nil {
+			op.Error("send limit error message failed", zap.Error(err))
+		}
+		op.Debug("ask command denied", zap.String("reason", check.Message))
+		return
+	}
+
+	// Получить или создать asker и записать использование
+	asker, err := h.svc.RecordAsk(ctx, telegramID, username, msg.Chat.ID)
+	if err != nil {
+		op.Error("record ask failed", zap.Error(err))
+		if _, err := h.api.Send(tgbotapi.NewMessage(msg.Chat.ID, "Ошибка выполнения команды")); err != nil {
+			op.Error("send error message failed", zap.Error(err))
+		}
+		return
+	}
+
+	op.Info("ask command executed", zap.Int64("asker_id", asker.ID))
+
+	// Выполнить AskAll
+	h.svc.AskAll(ctx)
 }
 
 func fromID(m *tgbotapi.Message) int64 {

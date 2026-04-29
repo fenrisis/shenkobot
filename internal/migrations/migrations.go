@@ -36,5 +36,6 @@ func Rollback(db *gorm.DB, log *zap.Logger) error {
 func all() []*gormigrate.Migration {
 	return []*gormigrate.Migration{
 		initSchema(),
+		askLimits(),
 	}
 }

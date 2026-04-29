@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -140,4 +142,142 @@ func (s *Service) RunScheduler(ctx context.Context) {
 			next = time.Now().Add(s.interval)
 		}
 	}
+}
+
+// AskCheckResult - результат проверки возможности использования /ask
+type AskCheckResult struct {
+	Allowed bool
+	Message string // Сообщение об ошибке если не allowed
+}
+
+// CanAsk проверяет все ограничения на использование команды /ask
+func (s *Service) CanAsk(ctx context.Context, telegramID int64, username string, chatID int64) AskCheckResult {
+	op := s.log.With(
+		zap.String("op", "can_ask"),
+		zap.Int64("telegram_id", telegramID),
+		zap.String("username", username),
+		zap.Int64("chat_id", chatID),
+	)
+
+	// 1. Проверка: не является ли пользователь таргетом
+	isTarget, err := s.repo.IsTarget(ctx, telegramID)
+	if err != nil {
+		op.Error("check is target failed", zap.Error(err))
+		return AskCheckResult{
+			Allowed: false,
+			Message: "Ошибка проверки прав доступа",
+		}
+	}
+	if isTarget {
+		op.Debug("user is target, cannot use /ask")
+		return AskCheckResult{
+			Allowed: false,
+			Message: "Таргеты не могут использовать эту команду",
+		}
+	}
+
+	// 2. Проверка: глобальный кулдаун чата
+	lastUsage, lastAsker, err := s.repo.GetLastGlobalAsk(ctx, chatID)
+	if err != nil {
+		op.Error("get last global ask failed", zap.Error(err))
+		return AskCheckResult{
+			Allowed: false,
+			Message: "Ошибка проверки глобального лимита",
+		}
+	}
+
+	if lastUsage != nil {
+		// Получить настройку global_cooldown_hours
+		cooldownStr, err := s.repo.GetSetting(ctx, "global_cooldown_hours")
+		if err != nil {
+			op.Error("get global_cooldown_hours setting failed", zap.Error(err))
+			cooldownStr = "3" // Дефолт
+		}
+		cooldownHours, _ := strconv.Atoi(cooldownStr)
+		cooldown := time.Duration(cooldownHours) * time.Hour
+
+		timeSinceLastAsk := time.Since(lastUsage.AskedAt)
+		if timeSinceLastAsk < cooldown {
+			remaining := cooldown - timeSinceLastAsk
+			hours := int(math.Floor(remaining.Hours()))
+			minutes := int(math.Ceil(remaining.Minutes())) % 60
+
+			op.Debug("global cooldown not expired",
+				zap.Duration("time_since_last", timeSinceLastAsk),
+				zap.Duration("remaining", remaining),
+			)
+
+			return AskCheckResult{
+				Allowed: false,
+				Message: fmt.Sprintf("Можно спросить через %d ч. %d мин. (последний раз спросил @%s)",
+					hours, minutes, lastAsker.Username),
+			}
+		}
+	}
+
+	// 3. Проверка: персональный лимит на день
+	asker, err := s.repo.GetOrCreateAsker(ctx, telegramID, username)
+	if err != nil {
+		op.Error("get or create asker failed", zap.Error(err))
+		return AskCheckResult{
+			Allowed: false,
+			Message: "Ошибка проверки персонального лимита",
+		}
+	}
+
+	todayCount, err := s.repo.GetTodayAskCount(ctx, asker.ID)
+	if err != nil {
+		op.Error("get today ask count failed", zap.Error(err))
+		return AskCheckResult{
+			Allowed: false,
+			Message: "Ошибка проверки персонального лимита",
+		}
+	}
+
+	// Получить настройку personal_limit_per_day
+	limitStr, err := s.repo.GetSetting(ctx, "personal_limit_per_day")
+	if err != nil {
+		op.Error("get personal_limit_per_day setting failed", zap.Error(err))
+		limitStr = "3" // Дефолт
+	}
+	personalLimit, _ := strconv.ParseInt(limitStr, 10, 64)
+
+	if todayCount >= personalLimit {
+		op.Debug("personal daily limit exceeded",
+			zap.Int64("today_count", todayCount),
+			zap.Int64("limit", personalLimit),
+		)
+		return AskCheckResult{
+			Allowed: false,
+			Message: fmt.Sprintf("Ваш лимит на сегодня исчерпан (использовано %d из %d)",
+				todayCount, personalLimit),
+		}
+	}
+
+	// Все проверки пройдены
+	op.Debug("all checks passed",
+		zap.Int64("asker_id", asker.ID),
+		zap.Int64("today_count", todayCount),
+		zap.Int64("limit", personalLimit),
+	)
+
+	return AskCheckResult{
+		Allowed: true,
+	}
+}
+
+// RecordAsk записывает использование команды /ask
+func (s *Service) RecordAsk(ctx context.Context, telegramID int64, username string, chatID int64) (*repository.Asker, error) {
+	// Получить или создать asker
+	asker, err := s.repo.GetOrCreateAsker(ctx, telegramID, username)
+	if err != nil {
+		return nil, err
+	}
+
+	// Записать использование
+	if err := s.repo.RecordAskUsage(ctx, asker.ID, chatID); err != nil {
+		return nil, err
+	}
+
+	return asker, nil
 }

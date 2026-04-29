@@ -27,6 +27,27 @@ type Question struct {
 	AnswerMessageID *int64
 }
 
+type Asker struct {
+	ID         int64     `gorm:"primaryKey"`
+	TelegramID int64     `gorm:"uniqueIndex;not null"`
+	Username   string    `gorm:"not null"`
+	CreatedAt  time.Time `gorm:"not null;default:now()"`
+	UpdatedAt  time.Time `gorm:"not null;default:now()"`
+}
+
+type AskUsage struct {
+	ID      int64     `gorm:"primaryKey"`
+	AskerID int64     `gorm:"index;not null"`
+	ChatID  int64     `gorm:"not null;index:idx_ask_usage_chat,priority:1"`
+	AskedAt time.Time `gorm:"not null;default:now();index:idx_ask_usage_chat,priority:2"`
+}
+
+type Setting struct {
+	Key         string `gorm:"primaryKey"`
+	Value       string `gorm:"not null"`
+	Description string
+}
+
 type Stat struct {
 	Username string
 	Asked    int
@@ -134,4 +155,107 @@ func (r *Repository) LastAskedAt(ctx context.Context) (time.Time, error) {
 		return time.Time{}, nil
 	}
 	return t.Time, nil
+}
+
+// GetSetting получает значение настройки по ключу
+func (r *Repository) GetSetting(ctx context.Context, key string) (string, error) {
+	var setting Setting
+	err := r.db.WithContext(ctx).Where("key = ?", key).First(&setting).Error
+	if err != nil {
+		return "", err
+	}
+	return setting.Value, nil
+}
+
+// IsTarget проверяет что пользователь является таргетом
+func (r *Repository) IsTarget(ctx context.Context, telegramID int64) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&Target{}).
+		Where("telegram_id = ?", telegramID).
+		Count(&count).Error
+	return count > 0, err
+}
+
+// GetOrCreateAsker получает или создаёт запись asker
+func (r *Repository) GetOrCreateAsker(ctx context.Context, telegramID int64, username string) (*Asker, error) {
+	var asker Asker
+	err := r.db.WithContext(ctx).
+		Where("telegram_id = ?", telegramID).
+		First(&asker).Error
+
+	if err == nil {
+		// Asker найден, обновляем username если изменился
+		if asker.Username != username {
+			asker.Username = username
+			asker.UpdatedAt = time.Now()
+			if err := r.db.WithContext(ctx).Save(&asker).Error; err != nil {
+				return nil, err
+			}
+		}
+		return &asker, nil
+	}
+
+	// Если не найден, создаём нового
+	if err == gorm.ErrRecordNotFound {
+		asker = Asker{
+			TelegramID: telegramID,
+			Username:   username,
+		}
+		if err := r.db.WithContext(ctx).Create(&asker).Error; err != nil {
+			return nil, err
+		}
+		return &asker, nil
+	}
+
+	return nil, err
+}
+
+// RecordAskUsage записывает использование команды /ask
+func (r *Repository) RecordAskUsage(ctx context.Context, askerID, chatID int64) error {
+	usage := AskUsage{
+		AskerID: askerID,
+		ChatID:  chatID,
+		AskedAt: time.Now(),
+	}
+	return r.db.WithContext(ctx).Create(&usage).Error
+}
+
+// GetLastGlobalAsk возвращает последнее использование /ask в чате с данными asker'а
+func (r *Repository) GetLastGlobalAsk(ctx context.Context, chatID int64) (*AskUsage, *Asker, error) {
+	var usage AskUsage
+	err := r.db.WithContext(ctx).
+		Where("chat_id = ?", chatID).
+		Order("asked_at DESC").
+		First(&usage).Error
+
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var asker Asker
+	err = r.db.WithContext(ctx).First(&asker, usage.AskerID).Error
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return &usage, &asker, nil
+}
+
+// GetTodayAskCount возвращает количество использований /ask за сегодня (с 00:00 UTC)
+func (r *Repository) GetTodayAskCount(ctx context.Context, askerID int64) (int64, error) {
+	// Начало сегодняшнего дня в UTC
+	now := time.Now().UTC()
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&AskUsage{}).
+		Where("asker_id = ? AND asked_at >= ?", askerID, startOfDay).
+		Count(&count).Error
+
+	return count, err
 }

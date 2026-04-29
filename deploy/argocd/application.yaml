@@ -7,6 +7,9 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
+  # Проект ArgoCD (default - встроенный проект)
+  project: default
+
   # Откуда ArgoCD берёт манифесты
   source:
     repoURL: https://github.com/fenrisis/shenkobot
