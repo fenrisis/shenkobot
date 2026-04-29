@@ -35,6 +35,8 @@ type Asker struct {
 	UpdatedAt  time.Time `gorm:"not null;default:now()"`
 }
 
+func (Asker) TableName() string { return "askers" }
+
 type AskUsage struct {
 	ID      int64     `gorm:"primaryKey"`
 	AskerID int64     `gorm:"index;not null"`
@@ -42,11 +44,15 @@ type AskUsage struct {
 	AskedAt time.Time `gorm:"not null;default:now();index:idx_ask_usage_chat,priority:2"`
 }
 
+func (AskUsage) TableName() string { return "ask_usage" }
+
 type Setting struct {
 	Key         string `gorm:"primaryKey"`
 	Value       string `gorm:"not null"`
 	Description string
 }
+
+func (Setting) TableName() string { return "settings" }
 
 type Stat struct {
 	Username string
