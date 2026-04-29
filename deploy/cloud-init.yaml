@@ -1,0 +1,66 @@
+#cloud-config
+# Hetzner Cloud CX22 (Ubuntu 24.04 x86_64) provisioning.
+# Pass this file to `hcloud server create --user-data-from-file ./cloud-init.yaml`
+# or paste it into the Cloud Console "User data" field.
+#
+# REPLACE the SSH key below with your own before applying.
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - ufw
+  - fail2ban
+  - unattended-upgrades
+
+users:
+  - name: deploy
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    groups: [docker]
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAA_REPLACE_ME deploy@laptop
+
+ssh_pwauth: false
+disable_root: true
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/10-hardening.conf
+    permissions: "0644"
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      MaxAuthTries 3
+
+  - path: /etc/apt/keyrings/.keep
+    content: ""
+
+runcmd:
+  # Docker engine + compose plugin (official repo)
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - bash -lc 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list'
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  - systemctl enable --now docker
+
+  # Firewall: bot only needs outbound (Telegram long-poll). Keep SSH only.
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw --force enable
+
+  # fail2ban for SSH
+  - systemctl enable --now fail2ban
+
+  # Project directory
+  - install -d -o deploy -g deploy -m 0750 /opt/shenkobot
+  - install -d -o deploy -g deploy -m 0750 /opt/shenkobot/backups
+
+  # Reload sshd to apply hardening
+  - systemctl reload ssh

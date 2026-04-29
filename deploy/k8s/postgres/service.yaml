@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+spec:
+  # Headless service - clusterIP: None означает что Service не получает cluster IP
+  # StatefulSet pods будут доступны напрямую по DNS:
+  # postgres-0.postgres.shenkobot.svc.cluster.local
+  # Но также доступен и короткий алиас 'postgres' внутри namespace
+  clusterIP: None
+  ports:
+  - port: 5432
+    targetPort: 5432
+    protocol: TCP
+    name: postgres
+  selector:
+    app: postgres

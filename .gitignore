@@ -2,9 +2,13 @@
 shenkobot
 /shenkobot.exe
 *.log
+*.sql
 .DS_Store
 .vscode
 .claude
 .idea
+
+# Kubernetes secrets (use template instead)
+deploy/k8s/CREATE_SECRETS.sh
 
 

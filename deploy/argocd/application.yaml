@@ -1,0 +1,54 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: shenkobot
+  namespace: argocd
+  # Finalizer гарантирует что при удалении Application сначала удалятся все ресурсы в кластере
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  # Откуда ArgoCD берёт манифесты
+  source:
+    repoURL: https://github.com/fenrisis/shenkobot
+    targetRevision: HEAD  # Отслеживать main ветку
+    path: deploy/k8s      # Путь к kustomization.yaml
+
+  # Куда ArgoCD деплоит
+  destination:
+    server: https://kubernetes.default.svc  # Тот же кластер где установлен ArgoCD
+    namespace: shenkobot
+
+  # Политики синхронизации
+  syncPolicy:
+    # Автоматическая синхронизация
+    automated:
+      # prune: true - удалять ресурсы которые убрали из Git
+      prune: true
+      # selfHeal: true - автоматически откатывать ручные изменения в кластере
+      selfHeal: true
+      # allowEmpty: false - не применять пустые commit'ы
+      allowEmpty: false
+
+    # Опции синхронизации
+    syncOptions:
+      # CreateNamespace=true - создать namespace если его нет
+      - CreateNamespace=true
+      # PrunePropagationPolicy=foreground - удалять зависимые ресурсы сначала
+      - PrunePropagationPolicy=foreground
+      # PruneLast=true - удалять ресурсы после apply новых
+      - PruneLast=true
+
+    # Retry стратегия при ошибках sync
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # Игнорировать различия в этих полях (управляются k8s)
+  ignoreDifferences:
+    - group: apps
+      kind: StatefulSet
+      jsonPointers:
+        - /spec/volumeClaimTemplates

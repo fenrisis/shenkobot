@@ -1,0 +1,31 @@
+# Kustomize configuration for shenkobot
+# Этот файл управляется как вручную, так и через CI (GitHub Actions)
+# CI обновляет секцию images через `kustomize edit set image` после сборки образа
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Применить все ресурсы в namespace shenkobot
+namespace: shenkobot
+
+# Список манифестов для применения
+resources:
+  - namespace.yaml
+  - postgres/statefulset.yaml
+  - postgres/service.yaml
+  # postgres/secret.yaml закомментирован - создаётся руками через kubectl
+  # - postgres/secret.yaml
+  - bot/deployment.yaml
+  - bot/configmap.yaml
+  # bot/secret.yaml закомментирован - создаётся руками через kubectl
+  # - bot/secret.yaml
+
+# Управление тегами образов
+# CI обновляет эту секцию после каждой сборки
+# Формат: kustomize edit set image <old_image>=<new_image>
+images:
+  - name: ghcr.io/fenrisis/shenkobot
+    newName: ghcr.io/fenrisis/shenkobot
+    newTag: latest
+    # После первого CI run этот тег изменится на sha-<commit>
+    # Например: newTag: sha-abc1234

@@ -1,0 +1,113 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shenkobot
+  labels:
+    app: shenkobot
+spec:
+  # 1 реплика - scheduler в боте не поддерживает масштабирование
+  # (нет leader election, gormigrate на старте конфликтует при нескольких подах)
+  replicas: 1
+  # strategy: Recreate - гарантирует что старый под умрёт до запуска нового
+  # Нужно чтобы не было двух scheduler'ов одновременно при rolling update
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: shenkobot
+  template:
+    metadata:
+      labels:
+        app: shenkobot
+    spec:
+      # initContainer для проверки доступности Postgres перед стартом бота
+      # Избегает CrashLoopBackOff если Postgres ещё не готов
+      initContainers:
+      - name: wait-for-postgres
+        image: postgres:16-alpine
+        command:
+        - sh
+        - -c
+        - |
+          until pg_isready -h postgres -p 5432 -U postgres; do
+            echo "Waiting for postgres..."
+            sleep 2
+          done
+          echo "Postgres is ready!"
+      containers:
+      - name: bot
+        # Image управляется через kustomization.yaml - не менять руками
+        image: ghcr.io/fenrisis/shenkobot:latest
+        # IfNotPresent для тегов sha-*, Always для latest
+        # После первого деплоя CI будет менять тег на sha-*
+        imagePullPolicy: IfNotPresent
+        env:
+        # Secrets
+        - name: BOT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: bot-secret
+              key: BOT_TOKEN
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: bot-secret
+              key: DB_PASSWORD
+        # ConfigMap values
+        - name: CHAT_ID
+          valueFrom:
+            configMapKeyRef:
+              name: bot-config
+              key: CHAT_ID
+        - name: REMINDER_HOURS
+          valueFrom:
+            configMapKeyRef:
+              name: bot-config
+              key: REMINDER_HOURS
+        - name: QUESTION
+          valueFrom:
+            configMapKeyRef:
+              name: bot-config
+              key: QUESTION
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: bot-config
+              key: DB_HOST
+        - name: DB_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: bot-config
+              key: DB_PORT
+        - name: DB_USER
+          valueFrom:
+            configMapKeyRef:
+              name: bot-config
+              key: DB_USER
+        - name: DB_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: bot-config
+              key: DB_NAME
+        - name: DB_SSLMODE
+          valueFrom:
+            configMapKeyRef:
+              name: bot-config
+              key: DB_SSLMODE
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: bot-config
+              key: LOG_LEVEL
+        - name: LOG_FORMAT
+          valueFrom:
+            configMapKeyRef:
+              name: bot-config
+              key: LOG_FORMAT
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          # Без limits на single-node setup - не критично
+        # Бот не имеет HTTP endpoint - без liveness/readiness проб
+        # k8s полагается на exit code процесса

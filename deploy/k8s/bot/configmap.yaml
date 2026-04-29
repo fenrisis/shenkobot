@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bot-config
+data:
+  # Telegram chat ID (получить через https://api.telegram.org/bot<TOKEN>/getUpdates)
+  # Формат: отрицательное число для групп, положительное для личных чатов
+  CHAT_ID: "-1002180262898"
+
+  # Период между раундами вопросов в часах
+  # 24 = день, 72 = 3 дня (дефолт), 168 = неделя
+  REMINDER_HOURS: "72"
+
+  # Текст вопроса который бот будет задавать
+  QUESTION: "Когда вернешься?"
+
+  # Database connection
+  # DB_HOST = postgres - DNS-имя headless service внутри namespace
+  DB_HOST: "postgres"
+  DB_PORT: "5432"
+  DB_USER: "postgres"
+  DB_NAME: "shenkobot"
+  # DB_SSLMODE = disable - внутри кластера TLS не нужен
+  DB_SSLMODE: "disable"
+
+  # Logging
+  # LOG_LEVEL: debug | info | warn | error
+  LOG_LEVEL: "info"
+  # LOG_FORMAT: json (prod, структурные логи) | console (dev, цветной вывод)
+  LOG_FORMAT: "json"
