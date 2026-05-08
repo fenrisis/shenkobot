@@ -26,4 +26,4 @@ resources:
 images:
 - name: ghcr.io/fenrisis/shenkobot
   newName: ghcr.io/fenrisis/shenkobot
-  newTag: sha-dd55fc1
+  newTag: sha-3260625
