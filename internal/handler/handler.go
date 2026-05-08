@@ -93,6 +93,7 @@ func (h *Handler) routeMessage(ctx context.Context, msg *tgbotapi.Message) {
 }
 
 func (h *Handler) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
+	// 1. Обработка команд
 	if msg.IsCommand() {
 		cmd := msg.Command()
 		h.log.Debug("command received", zap.String("command", cmd), zap.Int64("from_user_id", fromID(msg)))
@@ -107,20 +108,74 @@ func (h *Handler) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
-	if msg.ReplyToMessage == nil || msg.From == nil {
-		return
+	// 2. Обработка реплаев на вопросы бота (записываем ответы)
+	if msg.ReplyToMessage != nil && msg.From != nil {
+		if msg.ReplyToMessage.From != nil && msg.ReplyToMessage.From.ID == h.api.Self.ID {
+			h.svc.HandleReply(ctx,
+				msg.Chat.ID,
+				int64(msg.ReplyToMessage.MessageID),
+				int64(msg.MessageID),
+				msg.From.ID,
+				msg.Text,
+			)
+			return
+		}
 	}
-	if msg.ReplyToMessage.From == nil || msg.ReplyToMessage.From.ID != h.api.Self.ID {
+
+	// 3. Обработка обычных сообщений от таргетов (пассивный триггер /ask)
+	h.handleTargetMessage(ctx, msg)
+}
+
+// handleTargetMessage обрабатывает обычное сообщение в чат
+// Если отправитель - таргет и нет глобального кулдауна, запускает AskAll
+func (h *Handler) handleTargetMessage(ctx context.Context, msg *tgbotapi.Message) {
+	if msg.From == nil {
 		return
 	}
 
-	h.svc.HandleReply(ctx,
-		msg.Chat.ID,
-		int64(msg.ReplyToMessage.MessageID),
-		int64(msg.MessageID),
-		msg.From.ID,
-		msg.Text,
+	telegramID := msg.From.ID
+	username := msg.From.UserName
+	if username == "" {
+		username = msg.From.FirstName
+	}
+
+	op := h.log.With(
+		zap.String("op", "handle_target_message"),
+		zap.Int64("from_user_id", telegramID),
+		zap.String("username", username),
 	)
+
+	// Проверить: является ли отправитель таргетом
+	isTarget, err := h.svc.IsTarget(ctx, telegramID)
+	if err != nil {
+		op.Error("check is target failed", zap.Error(err))
+		return
+	}
+
+	// Если не таргет - игнорируем
+	if !isTarget {
+		return
+	}
+
+	op.Debug("message from target detected")
+
+	// Проверить глобальный кулдаун
+	canAsk := h.svc.CheckGlobalCooldown(ctx, msg.Chat.ID)
+	if !canAsk {
+		op.Debug("global cooldown active, ignoring target message")
+		return
+	}
+
+	op.Info("target message triggered ask (cooldown expired)")
+
+	// Записать использование (таргет становится asker'ом)
+	if err := h.svc.RecordTargetTriggeredAsk(ctx, telegramID, username, msg.Chat.ID); err != nil {
+		op.Error("record target triggered ask failed", zap.Error(err))
+		return
+	}
+
+	// Выполнить AskAll
+	h.svc.AskAll(ctx)
 }
 
 func (h *Handler) handleAskCommand(ctx context.Context, msg *tgbotapi.Message) {

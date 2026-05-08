@@ -207,10 +207,24 @@ func (s *Service) CanAsk(ctx context.Context, telegramID int64, username string,
 				zap.Duration("remaining", remaining),
 			)
 
+			// Проверить: является ли последний asker таргетом (для правильного текста сообщения)
+			lastAskerIsTarget, err := s.repo.IsTarget(ctx, lastAsker.TelegramID)
+			if err != nil {
+				op.Error("check if last asker is target failed", zap.Error(err))
+				lastAskerIsTarget = false // На всякий случай считаем что не таргет
+			}
+
+			var verb string
+			if lastAskerIsTarget {
+				verb = "триггернул"
+			} else {
+				verb = "спросил"
+			}
+
 			return AskCheckResult{
 				Allowed: false,
-				Message: fmt.Sprintf("Можно спросить через %d ч. %d мин. (последний раз спросил @%s)",
-					hours, minutes, lastAsker.Username),
+				Message: fmt.Sprintf("Можно спросить через %d ч. %d мин. (последний раз %s @%s)",
+					hours, minutes, verb, lastAsker.Username),
 			}
 		}
 	}
@@ -280,4 +294,58 @@ func (s *Service) RecordAsk(ctx context.Context, telegramID int64, username stri
 	}
 
 	return asker, nil
+}
+
+// IsTarget проверяет что пользователь является таргетом
+func (s *Service) IsTarget(ctx context.Context, telegramID int64) (bool, error) {
+	return s.repo.IsTarget(ctx, telegramID)
+}
+
+// CheckGlobalCooldown проверяет только глобальный кулдаун чата (без проверки роли и персонального лимита)
+// Возвращает true если кулдаун НЕ активен (можно спрашивать)
+func (s *Service) CheckGlobalCooldown(ctx context.Context, chatID int64) bool {
+	op := s.log.With(zap.String("op", "check_global_cooldown"), zap.Int64("chat_id", chatID))
+
+	lastUsage, _, err := s.repo.GetLastGlobalAsk(ctx, chatID)
+	if err != nil {
+		op.Error("get last global ask failed", zap.Error(err))
+		return false
+	}
+
+	// Если никогда не использовали /ask - кулдауна нет
+	if lastUsage == nil {
+		op.Debug("no previous ask found, cooldown not active")
+		return true
+	}
+
+	// Получить настройку global_cooldown_hours
+	cooldownStr, err := s.repo.GetSetting(ctx, "global_cooldown_hours")
+	if err != nil {
+		op.Error("get global_cooldown_hours setting failed", zap.Error(err))
+		cooldownStr = "3" // Дефолт
+	}
+	cooldownHours, _ := strconv.Atoi(cooldownStr)
+	cooldown := time.Duration(cooldownHours) * time.Hour
+
+	timeSinceLastAsk := time.Since(lastUsage.AskedAt)
+	cooldownActive := timeSinceLastAsk < cooldown
+
+	op.Debug("global cooldown check",
+		zap.Duration("time_since_last", timeSinceLastAsk),
+		zap.Duration("cooldown", cooldown),
+		zap.Bool("cooldown_active", cooldownActive),
+	)
+
+	return !cooldownActive
+}
+
+// RecordTargetTriggeredAsk записывает использование, инициированное таргетом
+// Таргет триггерит AskAll своим сообщением, записываем его как asker
+func (s *Service) RecordTargetTriggeredAsk(ctx context.Context, telegramID int64, username string, chatID int64) error {
+	asker, err := s.repo.GetOrCreateAsker(ctx, telegramID, username)
+	if err != nil {
+		return err
+	}
+
+	return s.repo.RecordAskUsage(ctx, asker.ID, chatID)
 }
